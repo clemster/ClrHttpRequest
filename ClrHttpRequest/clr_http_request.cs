@@ -3,17 +3,10 @@ using System;
 using System.Data.SqlTypes;
 using System.IO;
 using System.Net;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Xml.Linq;
 
-/// <summary>
-/// clr_http_request was originally written by Eilert Hjelmeseth
-/// and was published on 2018/10/11 here: http://www.sqlservercentral.com/articles/SQLCLR/177834/
-/// This version has minor improvements that allow it to support TLS1.2 security protocol
-/// and a couple of additional authorization methods.
-/// Update 2022-07-09: Added support for new Proxy header.
-/// Update 2020-08-17: Added UTF8 support, and case-insensitive headers.
-/// </summary>
 public partial class UserDefinedFunctions
 {
     [Microsoft.SqlServer.Server.SqlFunction]
@@ -24,7 +17,10 @@ public partial class UserDefinedFunctions
         [SqlFacet(MaxSize = -1, IsNullable = true)] SqlString headers,
         SqlInt32 timeout,
         SqlBoolean autoDecompress,
-        SqlBoolean convertResponseToBas64
+        SqlBoolean convertResponseToBas64,
+        [SqlFacet(MaxSize = -1, IsNullable = true)] SqlString certificatePath,
+        [SqlFacet(MaxSize = -1, IsNullable = true)] SqlString certificatePassword,
+        [SqlFacet(MaxSize = -1, IsNullable = true)] SqlString bearerToken
         //, bool debug
         )
     {
@@ -44,7 +40,11 @@ public partial class UserDefinedFunctions
         // If GET request, and there are parameters, build into url
         if (requestMethod.Value.ToUpper() == "GET" && !parameters.IsNull && !string.IsNullOrWhiteSpace(parameters.Value))
         {
-            url += (url.Value.IndexOf('?') > 0 ? "&" : "?") + parameters;
+            // Convert parameters to a regular string
+            string parametersString = parameters.Value;
+
+            // Append the parameters to the URL using a '?' or '&' as needed
+            url += (url.Value.IndexOf('?') > 0 ? "&" : "?") + parametersString;
         }
 
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
@@ -115,33 +115,30 @@ public partial class UserDefinedFunctions
                         request.Headers.Add("Authorization", "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(headerValue)));
                         break;
                     case "AUTHORIZATION-NETWORK-CREDENTIALS":
-                        var netCredValues = headerValue.Split(':');
-                        if (netCredValues.Length < 2)
+                        var values = headerValue.Split(':');
+                        if (values.Length < 2)
                         {
                             throw new FormatException("When specifying Authorization-Network-Credentials headers, please set the value in a format of username:password");
                         }
-                        request.Credentials = new NetworkCredential(netCredValues[0], netCredValues[1]);
+                        request.Credentials = new NetworkCredential(headerValue.Split(':')[0], headerValue.Split(':')[1]);
                         break;
-                    case "PROXY":
-                        var proxyValues = headerValue.Split(':');
-                        if (proxyValues.Length < 2)
-                        {
-                            throw new FormatException("When specifying the PROXY header, please set the value in a format of URI:PORT");
-                        }
-                        int proxyPort;
-                        if (!int.TryParse(proxyValues[1], out proxyPort))
-                        {
-                            throw new FormatException("When specifying the PROXY header in the format of URI:PORT, the PORT must be numeric");
-                        }
-                        WebProxy myproxy = new WebProxy(proxyValues[0], proxyPort);
-                        myproxy.BypassProxyOnLocal = false;
-                        request.Proxy = myproxy;
+
+                    case "AUTHORIZATION":
+                        request.Headers.Add("Authorization", "Bearer " + bearerToken.Value);
                         break;
                     default: // other headers
                         request.Headers.Add(headerName, headerValue);
                         break;
                 }
             }
+        }
+
+        // Load the certificate if provided
+        if (!certificatePath.IsNull && !string.IsNullOrWhiteSpace(certificatePath.Value) &&
+            !certificatePassword.IsNull && !string.IsNullOrWhiteSpace(certificatePassword.Value))
+        {
+            X509Certificate2 certificate = new X509Certificate2(certificatePath.Value, certificatePassword.Value);
+            request.ClientCertificates.Add(certificate);
         }
 
         // Set the method, timeout, and decompression
