@@ -9,6 +9,8 @@ http://www.sqlservercentral.com/articles/SQLCLR/177834/
 
 Eilert's GitHub project: https://github.com/eilerth/sqlclr-http-request
 
+An additional fork to add the ability to include a PFX certificate / certificate password and Bearer authentication/
+
 My version extends the project by adding the following:
 
 * Usage of TLS1.2 security protocol (nowadays a global standard).
